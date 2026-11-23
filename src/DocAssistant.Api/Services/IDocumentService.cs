@@ -8,5 +8,9 @@ public interface IDocumentService
     Task<IReadOnlyList<DocumentSummaryDto>> ListAsync(CancellationToken ct);
     Task<DocumentDetailDto?> GetAsync(Guid id, CancellationToken ct);
     Task<IReadOnlyList<ChunkDto>?> GetChunksAsync(Guid id, CancellationToken ct);
+
+    /// <summary>Re-creates the embeddings for an existing document (e.g. ones uploaded before Phase 2).</summary>
+    Task<DocumentDetailDto?> ReindexAsync(Guid id, CancellationToken ct);
+
     Task<bool> DeleteAsync(Guid id, CancellationToken ct);
 }

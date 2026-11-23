@@ -29,3 +29,7 @@ setup.bat
 check-sql.bat
 git-push.bat
 git-move.bat
+
+## Local Qdrant binary and its data
+tools/
+commit.bat

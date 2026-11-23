@@ -4,61 +4,90 @@ Upload PDFs and ask questions about them. Answers come with citations to the pag
 
 Built with **ASP.NET Core 8 Web API**, **Entity Framework Core + SQL Server**, **Qdrant** (vector search), **Google Gemini**, and a **React + TypeScript** frontend.
 
-> Status: in progress. Phase 1 (upload, text extraction, chunking) is done.
+> Status: in progress. Phase 1 (ingestion) and Phase 2 (RAG question answering) are done.
 
 ## Roadmap
 
 - [x] **Phase 1:** PDF upload, page-by-page text extraction, overlapping chunking, SQL Server storage
-- [ ] **Phase 2:** embeddings + Qdrant, question answering with Gemini, source citations
+- [x] **Phase 2:** embeddings + Qdrant, question answering with Gemini, source citations
 - [ ] **Phase 3:** React chat UI with streaming answers
 - [ ] **Phase 4:** JWT auth, Docker Compose, GitHub Actions CI, live deployment
 
-## How it works (Phase 1)
+## How it works
 
+**Ingestion (upload)**
 ```
-PDF upload ──► save file to /storage
-           ──► PdfPig extracts text page by page
-           ──► TextChunker splits each page into ~1000-char chunks (200-char overlap),
-               ending at sentence or word boundaries
-           ──► Document + Chunks saved to SQL Server (one transaction)
+PDF ──► PdfPig extracts text page by page
+    ──► TextChunker: ~1000-char chunks, 200-char overlap, cut at sentence/word boundaries
+    ──► Gemini gemini-embedding-001 turns each chunk into a 768-dim vector (RETRIEVAL_DOCUMENT)
+    ──► Qdrant stores vector + payload (document id, page, file name, text)
+    ──► SQL Server stores the document and its chunks
 ```
 
-Chunks keep their page number so later answers can cite "page 4".
+**Question answering (RAG)**
+```
+Question ──► embed (RETRIEVAL_QUERY) ──► Qdrant cosine search, top-k chunks
+         ──► prompt Gemini with the chunks as numbered sources [1]..[k]
+         ──► answer that cites [n] + the list of sources (file, page, score)
+```
+
+The model is told to answer only from the sources and to say when the answer is not in the documents.
 
 ## Project structure
 
 ```
 src/DocAssistant.Api/
-├── Controllers/   DocumentsController: HTTP endpoints only, no business logic
-├── Services/      PdfTextExtractor, TextChunker, DocumentService
-├── Data/          AppDbContext (EF Core)
-├── Models/        Document, DocumentChunk (database entities)
-├── DTOs/          What the API returns (never expose entities directly)
-└── Options/       Strongly typed settings from appsettings.json
+├── Controllers/        DocumentsController, ChatController (HTTP only)
+├── Services/           DocumentService (ingestion), RagService (retrieve + generate)
+│   ├── Ai/             GeminiClient: embeddings + generation over REST, with retry on 429/5xx
+│   └── VectorStore/    QdrantVectorStore: collection setup, upsert, filtered search, delete
+├── Data/               AppDbContext (EF Core)
+├── Models/             Document, DocumentChunk
+├── DTOs/               API request/response shapes
+└── Options/            Strongly typed settings (Gemini, Qdrant, Rag, Chunking, Storage)
 ```
 
 ## Run locally
 
-Requirements: .NET 8 SDK, SQL Server (or SQL Server Express / LocalDB).
+Requirements: .NET 8 SDK, SQL Server (Express/LocalDB is fine), Docker Desktop, a free Gemini API key from Google AI Studio.
 
-Set `ConnectionStrings:Default` in `appsettings.json` for your SQL Server, for example `Server=.\\SQLEXPRESS;...` for SQL Express or `Server=(localdb)\\MSSQLLocalDB;...` for LocalDB.
+1. Set `ConnectionStrings:Default` in `appsettings.json`, for example `Server=.\\SQLEXPRESS;...`.
+2. Start Qdrant: `docker compose up -d`
+3. Store the Gemini key outside the repo:
+   ```bash
+   cd src/DocAssistant.Api
+   dotnet user-secrets set "Gemini:ApiKey" "<your key>"
+   ```
+4. Create the database and run:
+   ```bash
+   dotnet tool install --global dotnet-ef --version 8.0.11   # once
+   dotnet ef database update
+   dotnet run --launch-profile http
+   ```
 
-```bash
-cd src/DocAssistant.Api
-dotnet tool install --global dotnet-ef      # once
-dotnet restore
-dotnet ef database update
-dotnet run --launch-profile http
-```
-
-Swagger opens at `http://localhost:5080/swagger`. On Windows you can also double-click `run.bat`.
+Swagger opens at `http://localhost:5080/swagger`; the Qdrant dashboard is at `http://localhost:6333/dashboard`.
+On Windows, `set-gemini-key.bat` and `run.bat` do steps 2–4 for you.
 
 ## API
 
 | Method | Route | What it does |
 | --- | --- | --- |
-| POST | `/api/documents` | Upload a PDF (form field `file`) |
+| POST | `/api/documents` | Upload a PDF (form field `file`); it is chunked, embedded and indexed |
 | GET | `/api/documents` | List documents |
 | GET | `/api/documents/{id}` | Document details |
 | GET | `/api/documents/{id}/chunks` | Chunks the document was split into |
-| DELETE | `/api/documents/{id}` | Delete document, chunks and stored file |
+| POST | `/api/documents/{id}/reindex` | Re-create a document's embeddings |
+| DELETE | `/api/documents/{id}` | Delete document, chunks, vectors and stored file |
+| POST | `/api/chat` | Ask a question: `{ "question": "...", "documentIds": [], "topK": 5 }` |
+
+Example answer:
+
+```json
+{
+  "answer": "The warranty covers parts for 24 months [1], but not labour [2].",
+  "sources": [
+    { "number": 1, "fileName": "manual.pdf", "pageNumber": 4, "score": 0.81, "snippet": "..." },
+    { "number": 2, "fileName": "manual.pdf", "pageNumber": 5, "score": 0.77, "snippet": "..." }
+  ]
+}
+```

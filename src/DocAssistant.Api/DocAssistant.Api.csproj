@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>DocAssistant.Api</RootNamespace>
+    <!-- Lets 'dotnet user-secrets' store the Gemini key outside the repo -->
+    <UserSecretsId>docassistant-api-5b1f0c7e</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

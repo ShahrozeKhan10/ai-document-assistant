@@ -2,6 +2,8 @@ using DocAssistant.Api.Data;
 using DocAssistant.Api.DTOs;
 using DocAssistant.Api.Models;
 using DocAssistant.Api.Options;
+using DocAssistant.Api.Services.Ai;
+using DocAssistant.Api.Services.VectorStore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -12,6 +14,8 @@ public class DocumentService : IDocumentService
     private readonly AppDbContext _db;
     private readonly IPdfTextExtractor _extractor;
     private readonly ITextChunker _chunker;
+    private readonly IEmbeddingService _embeddings;
+    private readonly IVectorStore _vectors;
     private readonly ILogger<DocumentService> _logger;
     private readonly string _storageRoot;
 
@@ -19,6 +23,8 @@ public class DocumentService : IDocumentService
         AppDbContext db,
         IPdfTextExtractor extractor,
         ITextChunker chunker,
+        IEmbeddingService embeddings,
+        IVectorStore vectors,
         IOptions<StorageOptions> storage,
         IWebHostEnvironment env,
         ILogger<DocumentService> logger)
@@ -26,6 +32,8 @@ public class DocumentService : IDocumentService
         _db = db;
         _extractor = extractor;
         _chunker = chunker;
+        _embeddings = embeddings;
+        _vectors = vectors;
         _logger = logger;
         _storageRoot = Path.Combine(env.ContentRootPath, storage.Value.RootPath);
         Directory.CreateDirectory(_storageRoot);
@@ -77,10 +85,6 @@ public class DocumentService : IDocumentService
                 document.Status = DocumentStatus.Failed;
                 document.Error = "No text found. The PDF may be scanned images (OCR is not supported yet).";
             }
-            else
-            {
-                document.Status = DocumentStatus.Ready;
-            }
         }
         catch (Exception ex)
         {
@@ -90,13 +94,45 @@ public class DocumentService : IDocumentService
             document.Chunks.Clear();
         }
 
-        // 3) Save the document and its chunks in one transaction.
+        // 3) Embed the chunks and store the vectors in Qdrant.
+        if (document.Status != DocumentStatus.Failed)
+        {
+            await TryIndexAsync(document, document.Chunks, ct);
+        }
+
+        // 4) Save the document and its chunks (kept even if indexing failed, so it can be re-indexed).
         _db.Documents.Add(document);
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Uploaded {FileName}: {Pages} pages, {Chunks} chunks, status {Status}",
             document.FileName, document.PageCount, document.Chunks.Count, document.Status);
 
+        return ToDetail(document, document.Chunks.Count);
+    }
+
+    public async Task<DocumentDetailDto?> ReindexAsync(Guid id, CancellationToken ct)
+    {
+        var document = await _db.Documents
+            .Include(d => d.Chunks)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (document is null) return null;
+
+        if (document.Chunks.Count == 0)
+        {
+            document.Status = DocumentStatus.Failed;
+            document.Error = "This document has no text chunks to index.";
+        }
+        else
+        {
+            // Remove old vectors first so we never keep duplicates.
+            try { await _vectors.DeleteByDocumentAsync(id, ct); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Could not delete old vectors for {Id}", id); }
+
+            var ordered = document.Chunks.OrderBy(c => c.Index).ToList();
+            await TryIndexAsync(document, ordered, ct);
+        }
+
+        await _db.SaveChangesAsync(ct);
         return ToDetail(document, document.Chunks.Count);
     }
 
@@ -134,6 +170,10 @@ public class DocumentService : IDocumentService
         var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == id, ct);
         if (document is null) return false;
 
+        // Remove vectors first; if Qdrant is down we still delete from the database.
+        try { await _vectors.DeleteByDocumentAsync(id, ct); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not delete vectors for {Id}", id); }
+
         _db.Documents.Remove(document); // chunks are removed by cascade delete
         await _db.SaveChangesAsync(ct);
 
@@ -141,6 +181,37 @@ public class DocumentService : IDocumentService
         if (File.Exists(path)) File.Delete(path);
 
         return true;
+    }
+
+    /// <summary>Embeds chunks and upserts them into Qdrant. Sets Ready or Failed on the document.</summary>
+    private async Task TryIndexAsync(Document document, IReadOnlyList<DocumentChunk> chunks, CancellationToken ct)
+    {
+        try
+        {
+            var vectors = await _embeddings.EmbedDocumentsAsync(chunks.Select(c => c.Content).ToList(), ct);
+
+            var points = chunks.Select((c, i) => new VectorPoint(
+                Id: c.Id,
+                Vector: vectors[i],
+                DocumentId: document.Id,
+                ChunkIndex: c.Index,
+                PageNumber: c.PageNumber,
+                FileName: document.FileName,
+                Text: c.Content)).ToList();
+
+            await _vectors.UpsertAsync(points, ct);
+
+            document.Status = DocumentStatus.Ready;
+            document.Error = null;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "Indexing failed for {FileName}", document.FileName);
+            document.Status = DocumentStatus.Failed;
+            document.Error = ex is GeminiException
+                ? $"Text was extracted but embedding failed: {ex.Message}"
+                : "Text was extracted but Qdrant could not be reached. Start Docker, then call /reindex.";
+        }
     }
 
     private static DocumentDetailDto ToDetail(Document d, int chunkCount) =>

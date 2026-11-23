@@ -62,7 +62,15 @@ public class DocumentsController : ControllerBase
         return chunks is null ? NotFound() : Ok(chunks);
     }
 
-    /// <summary>Delete a document, its chunks and the stored file.</summary>
+    /// <summary>Re-create embeddings for a document (use for PDFs uploaded before Phase 2, or after a failure).</summary>
+    [HttpPost("{id:guid}/reindex")]
+    public async Task<ActionResult<DocumentDetailDto>> Reindex(Guid id, CancellationToken ct)
+    {
+        var doc = await _documents.ReindexAsync(id, ct);
+        return doc is null ? NotFound() : Ok(doc);
+    }
+
+    /// <summary>Delete a document, its chunks, its vectors and the stored file.</summary>
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct) =>
         await _documents.DeleteAsync(id, ct) ? NoContent() : NotFound();
