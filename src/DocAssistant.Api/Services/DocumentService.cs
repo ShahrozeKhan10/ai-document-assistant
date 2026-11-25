@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace DocAssistant.Api.Services;
 
-public class DocumentService : IDocumentService
+public class DocumentService : IDocumentService, IDocumentScope
 {
     private readonly AppDbContext _db;
     private readonly IPdfTextExtractor _extractor;
@@ -39,11 +39,12 @@ public class DocumentService : IDocumentService
         Directory.CreateDirectory(_storageRoot);
     }
 
-    public async Task<DocumentDetailDto> UploadAsync(IFormFile file, CancellationToken ct)
+    public async Task<DocumentDetailDto> UploadAsync(IFormFile file, Guid ownerId, CancellationToken ct)
     {
         var document = new Document
         {
             Id = Guid.NewGuid(),
+            OwnerId = ownerId,
             FileName = Path.GetFileName(file.FileName),
             SizeBytes = file.Length,
             Status = DocumentStatus.Processing
@@ -110,11 +111,11 @@ public class DocumentService : IDocumentService
         return ToDetail(document, document.Chunks.Count);
     }
 
-    public async Task<DocumentDetailDto?> ReindexAsync(Guid id, CancellationToken ct)
+    public async Task<DocumentDetailDto?> ReindexAsync(Guid id, Guid ownerId, CancellationToken ct)
     {
         var document = await _db.Documents
             .Include(d => d.Chunks)
-            .FirstOrDefaultAsync(d => d.Id == id, ct);
+            .FirstOrDefaultAsync(d => d.Id == id && d.OwnerId == ownerId, ct);
         if (document is null) return null;
 
         if (document.Chunks.Count == 0)
@@ -136,25 +137,26 @@ public class DocumentService : IDocumentService
         return ToDetail(document, document.Chunks.Count);
     }
 
-    public async Task<IReadOnlyList<DocumentSummaryDto>> ListAsync(CancellationToken ct) =>
+    public async Task<IReadOnlyList<DocumentSummaryDto>> ListAsync(Guid ownerId, CancellationToken ct) =>
         await _db.Documents
             .AsNoTracking()
+            .Where(d => d.OwnerId == ownerId)
             .OrderByDescending(d => d.UploadedAtUtc)
             .Select(d => new DocumentSummaryDto(
                 d.Id, d.FileName, d.SizeBytes, d.PageCount, d.Chunks.Count, d.Status, d.UploadedAtUtc))
             .ToListAsync(ct);
 
-    public async Task<DocumentDetailDto?> GetAsync(Guid id, CancellationToken ct) =>
+    public async Task<DocumentDetailDto?> GetAsync(Guid id, Guid ownerId, CancellationToken ct) =>
         await _db.Documents
             .AsNoTracking()
-            .Where(d => d.Id == id)
+            .Where(d => d.Id == id && d.OwnerId == ownerId)
             .Select(d => new DocumentDetailDto(
                 d.Id, d.FileName, d.SizeBytes, d.PageCount, d.Chunks.Count, d.Status, d.Error, d.UploadedAtUtc))
             .FirstOrDefaultAsync(ct);
 
-    public async Task<IReadOnlyList<ChunkDto>?> GetChunksAsync(Guid id, CancellationToken ct)
+    public async Task<IReadOnlyList<ChunkDto>?> GetChunksAsync(Guid id, Guid ownerId, CancellationToken ct)
     {
-        var exists = await _db.Documents.AnyAsync(d => d.Id == id, ct);
+        var exists = await _db.Documents.AnyAsync(d => d.Id == id && d.OwnerId == ownerId, ct);
         if (!exists) return null;
 
         return await _db.DocumentChunks
@@ -165,9 +167,9 @@ public class DocumentService : IDocumentService
             .ToListAsync(ct);
     }
 
-    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct)
+    public async Task<bool> DeleteAsync(Guid id, Guid ownerId, CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == id, ct);
+        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == id && d.OwnerId == ownerId, ct);
         if (document is null) return false;
 
         // Remove vectors first; if Qdrant is down we still delete from the database.
@@ -182,6 +184,13 @@ public class DocumentService : IDocumentService
 
         return true;
     }
+
+    public async Task<IReadOnlyList<Guid>> GetReadyDocumentIdsAsync(Guid ownerId, CancellationToken ct) =>
+        await _db.Documents
+            .AsNoTracking()
+            .Where(d => d.OwnerId == ownerId && d.Status == DocumentStatus.Ready)
+            .Select(d => d.Id)
+            .ToListAsync(ct);
 
     /// <summary>Embeds chunks and upserts them into Qdrant. Sets Ready or Failed on the document.</summary>
     private async Task TryIndexAsync(Document document, IReadOnlyList<DocumentChunk> chunks, CancellationToken ct)

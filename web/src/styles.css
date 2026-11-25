@@ -90,6 +90,49 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .link-btn { background: none; border: none; padding: 0; color: var(--accent); font-size: 13px; }
 .link-btn.danger { color: var(--danger); }
 
+.user-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.user-email { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Login ---------- */
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.login-card h2 { margin: 6px 0 0; font-size: 18px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; }
+.field input {
+  font: inherit;
+  font-weight: 400;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+.field input:focus { border-color: var(--accent); }
+.field small { font-weight: 400; }
+.switch { font-size: 13px; text-align: center; margin: 0; }
+
 /* ---------- Chat panel ---------- */
 .chat-panel { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
 .chat-header {

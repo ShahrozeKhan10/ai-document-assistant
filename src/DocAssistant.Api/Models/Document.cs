@@ -10,6 +10,11 @@ public enum DocumentStatus
 public class Document
 {
     public Guid Id { get; set; }
+
+    /// <summary>The user who uploaded it. Nullable only for documents uploaded before login existed.</summary>
+    public Guid? OwnerId { get; set; }
+    public User? Owner { get; set; }
+
     public string FileName { get; set; } = string.Empty;
     public string StoredFileName { get; set; } = string.Empty;
     public long SizeBytes { get; set; }

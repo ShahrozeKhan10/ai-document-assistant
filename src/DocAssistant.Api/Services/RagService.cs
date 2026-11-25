@@ -11,6 +11,7 @@ namespace DocAssistant.Api.Services;
 
 /// <summary>
 /// Retrieval-Augmented Generation:
+///   0. work out which documents this user may search
 ///   1. embed the question
 ///   2. retrieve the closest chunks from Qdrant
 ///   3. give those chunks to Gemini as numbered sources and ask it to answer only from them
@@ -33,6 +34,7 @@ public partial class RagService : IRagService
     [GeneratedRegex(@"\[(\d+(?:\s*,\s*\d+)*)\]")]
     private static partial Regex CitationRegex();
 
+    private readonly IDocumentScope _scope;
     private readonly IEmbeddingService _embeddings;
     private readonly IVectorStore _vectors;
     private readonly IChatModel _chat;
@@ -40,12 +42,14 @@ public partial class RagService : IRagService
     private readonly ILogger<RagService> _logger;
 
     public RagService(
+        IDocumentScope scope,
         IEmbeddingService embeddings,
         IVectorStore vectors,
         IChatModel chat,
         IOptions<RagOptions> options,
         ILogger<RagService> logger)
     {
+        _scope = scope;
         _embeddings = embeddings;
         _vectors = vectors;
         _chat = chat;
@@ -53,9 +57,9 @@ public partial class RagService : IRagService
         _logger = logger;
     }
 
-    public async Task<ChatResponse> AskAsync(ChatRequest request, CancellationToken ct)
+    public async Task<ChatResponse> AskAsync(ChatRequest request, Guid ownerId, CancellationToken ct)
     {
-        var hits = await RetrieveAsync(request, ct);
+        var hits = await RetrieveAsync(request, ownerId, ct);
         if (hits.Count == 0) return new ChatResponse(NotFoundAnswer, Array.Empty<SourceDto>());
 
         var answer = await _chat.GenerateAsync(SystemInstruction, BuildPrompt(request.Question, hits), ct);
@@ -63,9 +67,9 @@ public partial class RagService : IRagService
     }
 
     public async IAsyncEnumerable<ChatStreamEvent> AskStreamAsync(
-        ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
+        ChatRequest request, Guid ownerId, [EnumeratorCancellation] CancellationToken ct)
     {
-        var hits = await RetrieveAsync(request, ct);
+        var hits = await RetrieveAsync(request, ownerId, ct);
         if (hits.Count == 0)
         {
             yield return new ChatStreamEvent("delta", Text: NotFoundAnswer);
@@ -84,12 +88,22 @@ public partial class RagService : IRagService
         yield return new ChatStreamEvent("sources", Sources: CitedSources(answer.ToString(), hits));
     }
 
-    private async Task<List<SearchHit>> RetrieveAsync(ChatRequest request, CancellationToken ct)
+    private async Task<List<SearchHit>> RetrieveAsync(ChatRequest request, Guid ownerId, CancellationToken ct)
     {
+        // Security: search only this user's ready documents. If the request names documents,
+        // keep only the ones the user owns, so nobody can query someone else's file by guessing its id.
+        var owned = await _scope.GetReadyDocumentIdsAsync(ownerId, ct);
+        var scope = request.DocumentIds is { Count: > 0 }
+            ? request.DocumentIds.Where(id => owned.Contains(id)).Distinct().ToList()
+            : owned.ToList();
+
+        // Never call the vector store with an empty filter: that would mean "search everything".
+        if (scope.Count == 0) return new List<SearchHit>();
+
         var topK = Math.Clamp(request.TopK ?? _options.TopK, 1, 20);
 
         var queryVector = await _embeddings.EmbedQueryAsync(request.Question.Trim(), ct);
-        var hits = (await _vectors.SearchAsync(queryVector, topK, request.DocumentIds, ct))
+        var hits = (await _vectors.SearchAsync(queryVector, topK, scope, ct))
             .Where(h => h.Score >= _options.MinScore)
             .ToList();
 

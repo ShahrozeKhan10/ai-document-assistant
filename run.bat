@@ -13,7 +13,7 @@ cd /d "%ROOT%"
     )
   ) else (
     echo qdrant.exe not found in tools\qdrant - trying Docker
-    docker compose up -d
+    docker compose up -d qdrant
   )
   echo.
   echo ===== EF database update

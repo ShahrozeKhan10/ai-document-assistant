@@ -1,14 +1,17 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DocAssistant.Api.DTOs;
+using DocAssistant.Api.Extensions;
 using DocAssistant.Api.Services;
 using DocAssistant.Api.Services.Ai;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DocAssistant.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/chat")]
 public class ChatController : ControllerBase
 {
@@ -41,7 +44,7 @@ public class ChatController : ControllerBase
 
         try
         {
-            return Ok(await _rag.AskAsync(request, ct));
+            return Ok(await _rag.AskAsync(request, User.GetUserId(), ct));
         }
         catch (GeminiException ex)
         {
@@ -80,7 +83,7 @@ public class ChatController : ControllerBase
 
         try
         {
-            await foreach (var ev in _rag.AskStreamAsync(request, ct))
+            await foreach (var ev in _rag.AskStreamAsync(request, User.GetUserId(), ct))
             {
                 if (ev.Type == "delta")
                     await WriteEventAsync("delta", new { text = ev.Text }, ct);

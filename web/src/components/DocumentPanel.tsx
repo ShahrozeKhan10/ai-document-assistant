@@ -6,8 +6,10 @@ interface Props {
   documents: DocumentSummary[];
   selectedIds: string[];
   loadError: string | null;
+  userEmail: string;
   onToggle: (id: string) => void;
   onChanged: () => Promise<void>;
+  onLogout: () => void;
 }
 
 function formatSize(bytes: number): string {
@@ -15,7 +17,15 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function DocumentPanel({ documents, selectedIds, loadError, onToggle, onChanged }: Props) {
+export default function DocumentPanel({
+  documents,
+  selectedIds,
+  loadError,
+  userEmail,
+  onToggle,
+  onChanged,
+  onLogout,
+}: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null); // what is happening right now
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
@@ -140,6 +150,13 @@ export default function DocumentPanel({ documents, selectedIds, loadError, onTog
       <p className="muted hint">
         Tick documents to search only inside them. Nothing ticked = search all documents.
       </p>
+
+      <div className="user-bar">
+        <span className="user-email" title={userEmail}>{userEmail}</span>
+        <button className="link-btn" onClick={onLogout}>
+          Log out
+        </button>
+      </div>
     </aside>
   );
 }

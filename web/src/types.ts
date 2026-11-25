@@ -33,3 +33,9 @@ export interface ChatMessage {
   error?: string;
   streaming?: boolean;
 }
+
+export interface AuthResponse {
+  token: string;
+  email: string;
+  expiresAtUtc: string;
+}

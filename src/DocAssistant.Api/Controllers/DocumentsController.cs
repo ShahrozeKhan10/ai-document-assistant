@@ -1,12 +1,15 @@
 using DocAssistant.Api.DTOs;
+using DocAssistant.Api.Extensions;
 using DocAssistant.Api.Options;
 using DocAssistant.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
 namespace DocAssistant.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/documents")]
 public class DocumentsController : ControllerBase
 {
@@ -37,20 +40,20 @@ public class DocumentsController : ControllerBase
         if (file.Length > maxBytes)
             return Problem($"File is larger than {_storage.MaxFileSizeMb} MB.", statusCode: 400);
 
-        var result = await _documents.UploadAsync(file, ct);
+        var result = await _documents.UploadAsync(file, User.GetUserId(), ct);
         return CreatedAtAction(nameof(Get), new { id = result.Id }, result);
     }
 
     /// <summary>List all uploaded documents, newest first.</summary>
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<DocumentSummaryDto>>> List(CancellationToken ct) =>
-        Ok(await _documents.ListAsync(ct));
+        Ok(await _documents.ListAsync(User.GetUserId(), ct));
 
     /// <summary>Get one document's details.</summary>
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<DocumentDetailDto>> Get(Guid id, CancellationToken ct)
     {
-        var doc = await _documents.GetAsync(id, ct);
+        var doc = await _documents.GetAsync(id, User.GetUserId(), ct);
         return doc is null ? NotFound() : Ok(doc);
     }
 
@@ -58,7 +61,7 @@ public class DocumentsController : ControllerBase
     [HttpGet("{id:guid}/chunks")]
     public async Task<ActionResult<IReadOnlyList<ChunkDto>>> GetChunks(Guid id, CancellationToken ct)
     {
-        var chunks = await _documents.GetChunksAsync(id, ct);
+        var chunks = await _documents.GetChunksAsync(id, User.GetUserId(), ct);
         return chunks is null ? NotFound() : Ok(chunks);
     }
 
@@ -66,12 +69,12 @@ public class DocumentsController : ControllerBase
     [HttpPost("{id:guid}/reindex")]
     public async Task<ActionResult<DocumentDetailDto>> Reindex(Guid id, CancellationToken ct)
     {
-        var doc = await _documents.ReindexAsync(id, ct);
+        var doc = await _documents.ReindexAsync(id, User.GetUserId(), ct);
         return doc is null ? NotFound() : Ok(doc);
     }
 
     /// <summary>Delete a document, its chunks, its vectors and the stored file.</summary>
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct) =>
-        await _documents.DeleteAsync(id, ct) ? NoContent() : NotFound();
+        await _documents.DeleteAsync(id, User.GetUserId(), ct) ? NoContent() : NotFound();
 }

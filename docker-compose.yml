@@ -1,3 +1,7 @@
+# Local development: only Qdrant is needed      ->  docker compose up -d qdrant
+# Whole app (SQL Server, Qdrant, API, web app)   ->  docker compose up -d --build   then open http://localhost:3000
+# Settings come from a .env file next to this one (copy .env.example to .env).
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.13.0
@@ -9,5 +13,43 @@ services:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: docassistant-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD}
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    restart: unless-stopped
+
+  api:
+    build: ./src/DocAssistant.Api
+    container_name: docassistant-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: "Server=sqlserver;Database=DocAssistant;User Id=sa;Password=${SA_PASSWORD};TrustServerCertificate=True"
+      Database__MigrateOnStartup: "true"
+      Qdrant__Url: http://qdrant:6333/
+      Gemini__ApiKey: ${GEMINI_API_KEY}
+      Jwt__Key: ${JWT_KEY}
+    volumes:
+      - api_storage:/app/storage
+    depends_on:
+      - sqlserver
+      - qdrant
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    container_name: docassistant-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   qdrant_data:
+  sqlserver_data:
+  api_storage:
