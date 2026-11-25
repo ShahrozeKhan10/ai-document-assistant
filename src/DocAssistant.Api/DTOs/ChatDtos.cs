@@ -16,3 +16,13 @@ public record SourceDto(
 public record ChatResponse(
     string Answer,
     IReadOnlyList<SourceDto> Sources);
+
+/// <summary>
+/// One event of a streamed answer:
+///   "delta"   = the next piece of answer text
+///   "sources" = the sources the answer actually cited (sent once, at the end)
+/// </summary>
+public record ChatStreamEvent(
+    string Type,
+    string? Text = null,
+    IReadOnlyList<SourceDto>? Sources = null);

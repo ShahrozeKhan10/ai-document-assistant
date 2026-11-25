@@ -4,13 +4,13 @@ Upload PDFs and ask questions about them. Answers come with citations to the pag
 
 Built with **ASP.NET Core 8 Web API**, **Entity Framework Core + SQL Server**, **Qdrant** (vector search), **Google Gemini**, and a **React + TypeScript** frontend.
 
-> Status: in progress. Phase 1 (ingestion) and Phase 2 (RAG question answering) are done.
+> Status: in progress. Phases 1–3 (ingestion, RAG, React chat UI) are done.
 
 ## Roadmap
 
 - [x] **Phase 1:** PDF upload, page-by-page text extraction, overlapping chunking, SQL Server storage
 - [x] **Phase 2:** embeddings + Qdrant, question answering with Gemini, source citations
-- [ ] **Phase 3:** React chat UI with streaming answers
+- [x] **Phase 3:** React chat UI with streaming answers and clickable citations
 - [ ] **Phase 4:** JWT auth, Docker Compose, GitHub Actions CI, live deployment
 
 ## How it works
@@ -28,7 +28,8 @@ PDF ──► PdfPig extracts text page by page
 ```
 Question ──► embed (RETRIEVAL_QUERY) ──► Qdrant cosine search, top-k chunks
          ──► prompt Gemini with the chunks as numbered sources [1]..[k]
-         ──► answer that cites [n] + the list of sources (file, page, score)
+         ──► answer that cites [n], streamed to the browser piece by piece (Server-Sent Events)
+         ──► only the sources the answer actually cited are returned
 ```
 
 The model is told to answer only from the sources and to say when the answer is not in the documents.
@@ -45,6 +46,11 @@ src/DocAssistant.Api/
 ├── Models/             Document, DocumentChunk
 ├── DTOs/               API request/response shapes
 └── Options/            Strongly typed settings (Gemini, Qdrant, Rag, Chunking, Storage)
+
+web/                    React 18 + TypeScript + Vite
+├── src/api.ts          fetch calls + a small SSE parser for the streaming endpoint
+├── src/components/     DocumentPanel (upload, list, scope), ChatPanel, MessageView (markdown + citations)
+└── vite.config.ts      dev proxy: /api → http://localhost:5080
 ```
 
 ## Run locally
@@ -66,7 +72,15 @@ Requirements: .NET 8 SDK, SQL Server (Express/LocalDB is fine), Docker Desktop, 
    ```
 
 Swagger opens at `http://localhost:5080/swagger`; the Qdrant dashboard is at `http://localhost:6333/dashboard`.
-On Windows, `set-gemini-key.bat` and `run.bat` do steps 2–4 for you.
+5. Start the web app (Node.js 18+):
+   ```bash
+   cd web
+   npm install
+   npm run dev
+   ```
+   Open `http://localhost:5173`.
+
+On Windows, `set-gemini-key.bat`, `run.bat` (API) and `web.bat` (web app) do these steps for you.
 
 ## API
 
@@ -79,6 +93,7 @@ On Windows, `set-gemini-key.bat` and `run.bat` do steps 2–4 for you.
 | POST | `/api/documents/{id}/reindex` | Re-create a document's embeddings |
 | DELETE | `/api/documents/{id}` | Delete document, chunks, vectors and stored file |
 | POST | `/api/chat` | Ask a question: `{ "question": "...", "documentIds": [], "topK": 5 }` |
+| POST | `/api/chat/stream` | Same, streamed as Server-Sent Events: `delta`, `sources`, `error`, `done` |
 
 Example answer:
 
